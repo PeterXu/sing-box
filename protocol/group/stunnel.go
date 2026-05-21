@@ -356,6 +356,9 @@ func (g *StunnelGroup) DialContext(ctx context.Context, network string, destinat
 		g.logger.Debug("stunnel: outbound ", outbound.Tag(), " failed: ", err, ", trying next")
 		g.markUnavailable(RealTag(outbound))
 		g.history.DeleteURLTestHistory(RealTag(outbound))
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 	}
 }
 
@@ -372,6 +375,9 @@ func (g *StunnelGroup) ListenPacket(ctx context.Context, destination M.Socksaddr
 		g.logger.Debug("stunnel: outbound ", outbound.Tag(), " failed: ", err, ", trying next")
 		g.markUnavailable(RealTag(outbound))
 		g.history.DeleteURLTestHistory(RealTag(outbound))
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 	}
 }
 
