@@ -1,0 +1,74 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:19293",
+      "secret": ""
+    }
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "local",
+        "type": "local",
+        "detour": "direct"
+      }
+    ],
+    "rules": [
+      {
+        "outbound": "any",
+        "server": "local"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 11080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "stunnel",
+      "tag": "auto",
+      "outbounds": [
+        "direct"
+      ],
+      "url": "https://cp.cloudflare.com/",
+      "interval": "10s",
+      "tolerance": 100,
+      "idle_timeout": "30m",
+      "cooldown": "30s",
+      "interrupt_exist_connections": false
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ],
+    "final": "auto"
+  }
+}

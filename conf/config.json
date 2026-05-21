@@ -1,0 +1,33 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "type": "socks",
+      "listen": "127.0.0.1",
+      "listen_port": 11080
+    },
+    {
+      "type": "http",
+      "listen": "127.0.0.1",
+      "listen_port": 11087
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": ["direct"],
+      "url": "https://cp.cloudflare.com/",
+      "interval": "10s"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "auto"
+  }
+}
