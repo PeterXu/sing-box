@@ -118,3 +118,12 @@ The health check loop, history storage, idle timeout, interrupt group, and lifec
   "route": { "final": "auto" }
 }
 ```
+
+## Phase 2: Dynamic Outbound Management
+
+Future enhancement to support adding/removing outbounds at runtime:
+- `UpdateOutbounds(tags []string)` method on stunnel struct
+- Thread-safe replacement of internal outbound list
+- Auto re-selection if current outbound is removed
+- Health check trigger for newly added outbounds
+- Expose via Clash API
