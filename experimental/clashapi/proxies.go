@@ -31,6 +31,7 @@ func proxyRouter(server *Server, router adapter.Router) http.Handler {
 		r.Get("/delay", getProxyDelay(server))
 		r.Put("/", updateProxy)
 		r.Put("/members", updateProxyMembers)
+		r.Put("/url", updateProxyURL)
 	})
 	return r
 }
@@ -206,6 +207,35 @@ func updateProxyMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := stunnel.UpdateOutbounds(req.Outbounds); err != nil {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError(err.Error()))
+		return
+	}
+
+	render.NoContent(w, r)
+}
+
+type UpdateProxyURLRequest struct {
+	URL string `json:"url"`
+}
+
+func updateProxyURL(w http.ResponseWriter, r *http.Request) {
+	req := UpdateProxyURLRequest{}
+	if err := render.DecodeJSON(r.Body, &req); err != nil {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, ErrBadRequest)
+		return
+	}
+
+	proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
+	stunnel, ok := proxy.(*group.Stunnel)
+	if !ok {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError("Must be a Stunnel"))
+		return
+	}
+
+	if err := stunnel.UpdateURL(req.URL); err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, newError(err.Error()))
 		return

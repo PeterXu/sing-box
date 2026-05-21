@@ -174,6 +174,18 @@ func (s *Stunnel) UpdateOutbounds(tags []string) error {
 	return nil
 }
 
+func (s *Stunnel) UpdateURL(url string) error {
+	if url == "" {
+		return E.New("url cannot be empty")
+	}
+	s.group.access.Lock()
+	s.group.link = url
+	s.link = url
+	s.group.access.Unlock()
+	go s.group.CheckOutbounds(true)
+	return nil
+}
+
 func (s *Stunnel) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	s.group.Touch()
 	switch N.NetworkName(network) {
@@ -479,6 +491,7 @@ func (g *StunnelGroup) urlTest(ctx context.Context, force bool) (map[string]uint
 	defer g.checking.Store(false)
 	g.access.RLock()
 	testOutbounds := g.outbounds
+	testLink := g.link
 	g.access.RUnlock()
 	b, _ := batch.New(ctx, batch.WithConcurrencyNum[any](10))
 	checked := make(map[string]bool)
@@ -501,7 +514,7 @@ func (g *StunnelGroup) urlTest(ctx context.Context, force bool) (map[string]uint
 		b.Go(realTag, func() (any, error) {
 			testCtx, cancel := context.WithTimeout(g.ctx, C.TCPTimeout)
 			defer cancel()
-			t, err := urltest.URLTest(testCtx, g.link, p)
+			t, err := urltest.URLTest(testCtx, testLink, p)
 			if err != nil {
 				g.logger.Debug("outbound ", tag, " unavailable: ", err)
 				g.history.DeleteURLTestHistory(realTag)

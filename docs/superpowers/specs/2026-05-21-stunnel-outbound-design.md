@@ -84,7 +84,10 @@ Configurable via `interrupt_exist_connections` (default: false). When enabled an
 | `protocol/group/stunnel.go` | New — stunnel outbound implementation |
 | `option/group.go` | Add `StunnelOutboundOptions` struct |
 | `constant/proxy.go` | Add `TypeStunnel = "stunnel"` constant |
+| `constant/timeout.go` | Add `DefaultStunnelCooldown` constant |
 | `include/registry.go` | Add `group.RegisterStunnel(registry)` |
+| `experimental/clashapi/proxies.go` | Add PUT `/proxies/{name}/members` and PUT `/proxies/{name}/url` endpoints |
+| `cmd/sing-box/cmd_stunnel.go` | New — `sing-box stunnel` CLI subcommand |
 
 ## Implementation Approach
 
@@ -121,9 +124,32 @@ The health check loop, history storage, idle timeout, interrupt group, and lifec
 
 ## Phase 2: Dynamic Outbound Management
 
-Future enhancement to support adding/removing outbounds at runtime:
+Support adding/removing outbounds at runtime:
 - `UpdateOutbounds(tags []string)` method on stunnel struct
-- Thread-safe replacement of internal outbound list
+- Thread-safe replacement of internal outbound list (RWMutex)
 - Auto re-selection if current outbound is removed
 - Health check trigger for newly added outbounds
-- Expose via Clash API
+- Expose via Clash API: `PUT /proxies/{name}/members` with `{"outbounds": ["tag1", ...]}`
+
+## Phase 3: Dynamic URL Management
+
+Support changing the health check URL at runtime:
+- `UpdateURL(url string)` method on stunnel struct
+- Triggers immediate health check with new URL
+- Expose via Clash API: `PUT /proxies/{name}/url` with `{"url": "https://..."}`
+- CLI: `sing-box stunnel url <group> <url>`
+
+## CLI: `sing-box stunnel`
+
+CLI subcommand for managing stunnel groups via Clash API. Reads API address and secret from config.json.
+
+```
+sing-box stunnel list                          # List all stunnel groups
+sing-box stunnel list <group>                  # Show group details with delays
+sing-box stunnel add <group> <outbound...>     # Add outbounds (skip existing)
+sing-box stunnel remove <group> <outbound...>  # Remove outbounds (skip non-existing)
+sing-box stunnel update <group> <outbound...>  # Replace outbound list
+sing-box stunnel url <group> <url>             # Update health check URL
+```
+
+Active outbound protection: `remove` and `update` block if the active outbound would be removed, unless `--force` is passed.

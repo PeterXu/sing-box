@@ -96,10 +96,27 @@ var commandStunnelUpdate = &cobra.Command{
 	},
 }
 
+var commandStunnelURL = &cobra.Command{
+	Use:   "url <group> <url>",
+	Short: "Update health check URL of a stunnel group",
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		addr, secret, err := clashAPIConfig()
+		if err != nil {
+			log.Fatal(err)
+		}
+		client := &http.Client{Timeout: 30 * time.Second}
+		err = stunnelSetURL(addr, secret, client, args[0], args[1])
+		if err != nil {
+			log.Fatal(err)
+		}
+	},
+}
+
 func init() {
 	commandStunnelRemove.Flags().BoolVar(&commandStunnelRemoveForce, "force", false, "proceed even if removing active outbound")
 	commandStunnelUpdate.Flags().BoolVar(&commandStunnelUpdateForce, "force", false, "proceed even if removing active outbound")
-	commandStunnel.AddCommand(commandStunnelList, commandStunnelAdd, commandStunnelRemove, commandStunnelUpdate)
+	commandStunnel.AddCommand(commandStunnelList, commandStunnelAdd, commandStunnelRemove, commandStunnelUpdate, commandStunnelURL)
 	mainCommand.AddCommand(commandStunnel)
 }
 
@@ -348,6 +365,16 @@ func stunnelUpdate(baseURL, secret string, client *http.Client, group string, ta
 		}
 	}
 	if err := setGroupMembers(baseURL, secret, client, group, tags); err != nil {
+		return err
+	}
+	fmt.Println("Done.")
+	return nil
+}
+
+func stunnelSetURL(baseURL, secret string, client *http.Client, group, url string) error {
+	body := map[string]string{"url": url}
+	_, err := clashAPIRequest(client, http.MethodPut, baseURL+"/proxies/"+group+"/url", secret, body)
+	if err != nil {
 		return err
 	}
 	fmt.Println("Done.")
