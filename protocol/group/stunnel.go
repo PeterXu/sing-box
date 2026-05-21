@@ -122,6 +122,9 @@ func (s *Stunnel) CheckOutbounds() {
 }
 
 func (s *Stunnel) UpdateOutbounds(tags []string) error {
+	if len(tags) == 0 {
+		return E.New("outbounds list cannot be empty")
+	}
 	newOutbounds := make([]adapter.Outbound, 0, len(tags))
 	for i, tag := range tags {
 		detour, loaded := s.outbound.Outbound(tag)
@@ -132,8 +135,6 @@ func (s *Stunnel) UpdateOutbounds(tags []string) error {
 	}
 
 	s.group.access.Lock()
-	defer s.group.access.Unlock()
-
 	s.group.outbounds = newOutbounds
 	s.tags = tags
 
@@ -165,8 +166,9 @@ func (s *Stunnel) UpdateOutbounds(tags []string) error {
 	if (!tcpValid || !udpValid) && s.interruptExternalConnections {
 		s.group.interruptGroup.Interrupt(true)
 	}
+	s.group.access.Unlock()
 
-	// Trigger immediate re-selection + health check
+	// Trigger immediate re-selection + health check (outside lock)
 	go s.group.CheckOutbounds(true)
 
 	return nil
@@ -232,7 +234,7 @@ type StunnelGroup struct {
 	selectedOutboundUDP          adapter.Outbound
 	interruptGroup               *interrupt.Group
 	interruptExternalConnections bool
-	access                       sync.Mutex
+	access                       sync.RWMutex
 	ticker                       *time.Ticker
 	close                        chan struct{}
 	started                      bool
@@ -345,6 +347,9 @@ func (g *StunnelGroup) clearUnavailable(tag string) {
 }
 
 func (g *StunnelGroup) Select(network string) (adapter.Outbound, bool) {
+	g.access.RLock()
+	outbounds := g.outbounds
+	g.access.RUnlock()
 	var minDelay uint16
 	var minOutbound adapter.Outbound
 	switch network {
@@ -363,7 +368,7 @@ func (g *StunnelGroup) Select(network string) (adapter.Outbound, bool) {
 			}
 		}
 	}
-	for _, detour := range g.outbounds {
+	for _, detour := range outbounds {
 		if !common.Contains(detour.Network(), network) {
 			continue
 		}
@@ -380,7 +385,7 @@ func (g *StunnelGroup) Select(network string) (adapter.Outbound, bool) {
 		}
 	}
 	if minOutbound == nil {
-		for _, detour := range g.outbounds {
+		for _, detour := range outbounds {
 			if !common.Contains(detour.Network(), network) {
 				continue
 			}
@@ -472,10 +477,13 @@ func (g *StunnelGroup) urlTest(ctx context.Context, force bool) (map[string]uint
 		return result, nil
 	}
 	defer g.checking.Store(false)
+	g.access.RLock()
+	testOutbounds := g.outbounds
+	g.access.RUnlock()
 	b, _ := batch.New(ctx, batch.WithConcurrencyNum[any](10))
 	checked := make(map[string]bool)
 	var resultAccess sync.Mutex
-	for _, detour := range g.outbounds {
+	for _, detour := range testOutbounds {
 		tag := detour.Tag()
 		realTag := RealTag(detour)
 		if checked[realTag] {
