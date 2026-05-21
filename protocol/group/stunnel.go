@@ -121,6 +121,57 @@ func (s *Stunnel) CheckOutbounds() {
 	s.group.CheckOutbounds(true)
 }
 
+func (s *Stunnel) UpdateOutbounds(tags []string) error {
+	newOutbounds := make([]adapter.Outbound, 0, len(tags))
+	for i, tag := range tags {
+		detour, loaded := s.outbound.Outbound(tag)
+		if !loaded {
+			return E.New("outbound ", i, " not found: ", tag)
+		}
+		newOutbounds = append(newOutbounds, detour)
+	}
+
+	s.group.access.Lock()
+	defer s.group.access.Unlock()
+
+	s.group.outbounds = newOutbounds
+	s.tags = tags
+
+	// Clear unavailable marks for entries in the new list
+	s.group.unavailableAccess.Lock()
+	newUnavailable := make(map[string]time.Time)
+	for tag, markedAt := range s.group.unavailable {
+		for _, o := range newOutbounds {
+			if RealTag(o) == tag {
+				newUnavailable[tag] = markedAt
+				break
+			}
+		}
+	}
+	s.group.unavailable = newUnavailable
+	s.group.unavailableAccess.Unlock()
+
+	// Check if current selections are still valid
+	tcpValid := outboundInList(s.group.selectedOutboundTCP, newOutbounds)
+	udpValid := outboundInList(s.group.selectedOutboundUDP, newOutbounds)
+	if !tcpValid {
+		s.group.selectedOutboundTCP = nil
+	}
+	if !udpValid {
+		s.group.selectedOutboundUDP = nil
+	}
+
+	// Interrupt if selection changed and configured
+	if (!tcpValid || !udpValid) && s.interruptExternalConnections {
+		s.group.interruptGroup.Interrupt(true)
+	}
+
+	// Trigger immediate re-selection + health check
+	go s.group.CheckOutbounds(true)
+
+	return nil
+}
+
 func (s *Stunnel) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	s.group.Touch()
 	switch N.NetworkName(network) {
@@ -482,4 +533,16 @@ func (g *StunnelGroup) performUpdateCheck() {
 	if updated {
 		g.interruptGroup.Interrupt(g.interruptExternalConnections)
 	}
+}
+
+func outboundInList(target adapter.Outbound, list []adapter.Outbound) bool {
+	if target == nil {
+		return false
+	}
+	for _, o := range list {
+		if o.Tag() == target.Tag() {
+			return true
+		}
+	}
+	return false
 }

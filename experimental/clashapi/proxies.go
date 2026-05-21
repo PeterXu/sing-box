@@ -30,6 +30,7 @@ func proxyRouter(server *Server, router adapter.Router) http.Handler {
 		r.Get("/", getProxy(server))
 		r.Get("/delay", getProxyDelay(server))
 		r.Put("/", updateProxy)
+		r.Put("/members", updateProxyMembers)
 	})
 	return r
 }
@@ -178,6 +179,35 @@ func updateProxy(w http.ResponseWriter, r *http.Request) {
 	if !selector.SelectOutbound(req.Name) {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, newError("Selector update error: not found"))
+		return
+	}
+
+	render.NoContent(w, r)
+}
+
+type UpdateProxyMembersRequest struct {
+	Outbounds []string `json:"outbounds"`
+}
+
+func updateProxyMembers(w http.ResponseWriter, r *http.Request) {
+	req := UpdateProxyMembersRequest{}
+	if err := render.DecodeJSON(r.Body, &req); err != nil {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, ErrBadRequest)
+		return
+	}
+
+	proxy := r.Context().Value(CtxKeyProxy).(adapter.Outbound)
+	stunnel, ok := proxy.(*group.Stunnel)
+	if !ok {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError("Must be a Stunnel"))
+		return
+	}
+
+	if err := stunnel.UpdateOutbounds(req.Outbounds); err != nil {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError(err.Error()))
 		return
 	}
 
