@@ -303,7 +303,16 @@ func stunnelRemove(baseURL, secret string, client *http.Client, group string, ta
 	}
 	removeSet := make(map[string]bool)
 	for _, t := range tags {
+		// Check if it's an internal type - cannot be removed
+		obType := getOutboundType(baseURL, secret, client, t)
+		if isInternalType(obType) {
+			fmt.Fprintf(os.Stderr, "Warning: skipping internal outbound %q (type: %s)\n", t, obType)
+			continue
+		}
 		removeSet[t] = true
+	}
+	if len(removeSet) == 0 {
+		return E.New("no valid outbounds to remove (all are internal types or not found)")
 	}
 	if info.Now != "" && removeSet[info.Now] && !force {
 		return E.New(fmt.Sprintf("outbound %q is currently active. Use --force to proceed.", info.Now))
@@ -628,7 +637,7 @@ func stunnelExport(baseURL, secret string, client *http.Client, outputFile strin
 		var info proxyInfo
 		if json.Unmarshal(raw, &info) == nil && info.Type == "Stunnel" {
 			// Export only protocol outbounds (not internal types like direct/block)
-			var outbounds []json.RawMessage
+			outbounds := make([]json.RawMessage, 0)
 			for _, tag := range info.All {
 				obType := getOutboundType(baseURL, secret, client, tag)
 				if isProtocolType(obType) {

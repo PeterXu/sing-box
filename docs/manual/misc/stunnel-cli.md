@@ -53,6 +53,8 @@ All:
 sing-box stunnel remove <group> <outbound...>
 ```
 
+**Note:** Internal outbounds (`direct`, `block`, `stunnel`, `selector`, `urltest`, `dns`) cannot be removed. They will be skipped with a warning.
+
 Use `--force` to proceed even if removing the currently active outbound:
 
 ```bash
@@ -62,6 +64,10 @@ Error: outbound "新加坡1" is currently active. Use --force to proceed.
 $ sing-box stunnel remove proxy-auto 新加坡1 --force
 Warning: removing active outbound "新加坡1", server will re-select.
 Done.
+
+$ sing-box stunnel remove proxy-auto direct
+Warning: skipping internal outbound "direct" (type: Direct)
+Error: no valid outbounds to remove (all are internal types or not found)
 ```
 
 ### Update health check URL
