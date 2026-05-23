@@ -368,12 +368,33 @@ var internalOutboundTypes = map[string]bool{
 	"Selector": true, "URLTest": true, "DNS": true,
 }
 
+// Lowercase internal type names (used in user config files)
+var protocolConfigTypes = map[string]bool{
+	"vmess": true, "vless": true, "trojan": true, "shadowsocks": true,
+	"shadowtls": true, "socks": true, "http": true, "wireguard": true,
+	"tuic": true, "hysteria2": true, "hysteria": true, "naive": true,
+	"anytls": true,
+}
+
+var internalConfigTypes = map[string]bool{
+	"block": true, "direct": true, "stunnel": true,
+	"selector": true, "urltest": true, "dns": true,
+}
+
 func isProtocolType(t string) bool {
 	return protocolOutboundTypes[t]
 }
 
 func isInternalType(t string) bool {
 	return internalOutboundTypes[t]
+}
+
+func isProtocolConfigType(t string) bool {
+	return protocolConfigTypes[t]
+}
+
+func isInternalConfigType(t string) bool {
+	return internalConfigTypes[t]
 }
 
 func getOutboundType(baseURL, secret string, client *http.Client, tag string) string {
@@ -442,7 +463,7 @@ func stunnelApply(baseURL, secret string, client *http.Client, configFile string
 				fmt.Fprintf(os.Stderr, "  Error: outbound config missing 'type' field\n")
 				continue
 			}
-			if !isProtocolType(outboundType) {
+			if !isProtocolConfigType(outboundType) {
 				fmt.Fprintf(os.Stderr, "  Error: outbound type \"%s\" is not allowed (internal types: block/direct/stunnel/selector/urltest/dns cannot be modified)\n", outboundType)
 				continue
 			}
