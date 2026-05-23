@@ -44,4 +44,5 @@ type OutboundManager interface {
 	Default() Outbound
 	Remove(tag string) error
 	Create(ctx context.Context, router Router, logger log.ContextLogger, tag string, outboundType string, options any) error
+	Options(tag string) any
 }

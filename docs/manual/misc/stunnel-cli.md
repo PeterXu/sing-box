@@ -166,7 +166,7 @@ Use `--force` to proceed even if removing active outbound.
 
 ### Export current config
 
-Export all stunnel groups' configuration.
+Export all stunnel groups' configuration with full outbound configs.
 
 ```bash
 # Print to stdout
@@ -182,14 +182,23 @@ Example:
 $ sing-box stunnel export
 {
   "proxy-auto": {
-    "outbounds": ["新加坡1", "香港1"],
+    "outbounds": [
+      {
+        "type": "vmess",
+        "tag": "新加坡1",
+        "server": "example.com",
+        "server_port": 443,
+        "uuid": "...",
+        "tls": { "enabled": true }
+      }
+    ],
     "url": "https://cp.cloudflare.com/"
   }
 }
-Note: Export shows tag names only. For 'stunnel apply', you need full outbound configs.
+Note: Export shows full outbound configs usable with 'stunnel apply'.
 ```
 
-**Note:** The export only shows protocol outbound tag names (internal types like `direct`/`block` are excluded). The Clash API doesn't provide full outbound configurations. For `stunnel apply`, you need to maintain full outbound configs separately.
+**Note:** The export only includes protocol outbounds (internal types like `direct`/`block` are excluded). The exported config is directly usable with `stunnel apply`.
 
 ## Error Handling
 

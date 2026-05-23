@@ -76,6 +76,10 @@ func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
 	info.Put("type", clashType)
 	info.Put("name", detour.Tag())
 	info.Put("udp", common.Contains(detour.Network(), N.NetworkUDP))
+	// Add full config from OutboundManager
+	if options := server.outbound.Options(detour.Tag()); options != nil {
+		info.Put("config", options)
+	}
 	delayHistory := server.urlTestHistory.LoadURLTestHistory(adapter.OutboundTag(detour))
 	if delayHistory != nil {
 		info.Put("history", []*adapter.URLTestHistory{delayHistory})

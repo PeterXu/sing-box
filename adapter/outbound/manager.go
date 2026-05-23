@@ -28,6 +28,7 @@ type Manager struct {
 	stage                   adapter.StartStage
 	outbounds               []adapter.Outbound
 	outboundByTag           map[string]adapter.Outbound
+	optionsByTag            map[string]any
 	dependByTag             map[string][]string
 	defaultOutbound         adapter.Outbound
 	defaultOutboundFallback func() (adapter.Outbound, error)
@@ -40,6 +41,7 @@ func NewManager(logger logger.ContextLogger, registry adapter.OutboundRegistry, 
 		endpoint:      endpoint,
 		defaultTag:    defaultTag,
 		outboundByTag: make(map[string]adapter.Outbound),
+		optionsByTag:  make(map[string]any),
 		dependByTag:   make(map[string][]string),
 	}
 }
@@ -222,6 +224,7 @@ func (m *Manager) Remove(tag string) error {
 		return os.ErrInvalid
 	}
 	delete(m.outboundByTag, tag)
+	delete(m.optionsByTag, tag)
 	index := common.Index(m.outbounds, func(it adapter.Outbound) bool {
 		return it == outbound
 	})
@@ -296,6 +299,7 @@ func (m *Manager) Create(ctx context.Context, router adapter.Router, logger log.
 	}
 	m.outbounds = append(m.outbounds, outbound)
 	m.outboundByTag[tag] = outbound
+	m.optionsByTag[tag] = options
 	dependencies := outbound.Dependencies()
 	for _, dependency := range dependencies {
 		m.dependByTag[dependency] = append(m.dependByTag[dependency], tag)
@@ -307,4 +311,11 @@ func (m *Manager) Create(ctx context.Context, router adapter.Router, logger log.
 		}
 	}
 	return nil
+}
+
+
+func (m *Manager) Options(tag string) any {
+	m.access.RLock()
+	defer m.access.RUnlock()
+	return m.optionsByTag[tag]
 }

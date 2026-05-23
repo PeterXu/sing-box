@@ -166,7 +166,7 @@ Applying config for group: proxy-auto (mode: remove)
 
 ### 导出当前配置
 
-导出所有 stunnel 组的配置。
+导出所有 stunnel 组的配置，包含完整出站信息。
 
 ```bash
 # 输出到 stdout
@@ -182,14 +182,23 @@ sing-box stunnel export <output-file>
 $ sing-box stunnel export
 {
   "proxy-auto": {
-    "outbounds": ["新加坡1", "香港1"],
+    "outbounds": [
+      {
+        "type": "vmess",
+        "tag": "新加坡1",
+        "server": "example.com",
+        "server_port": 443,
+        "uuid": "...",
+        "tls": { "enabled": true }
+      }
+    ],
     "url": "https://cp.cloudflare.com/"
   }
 }
-Note: Export shows tag names only. For 'stunnel apply', you need full outbound configs.
+Note: Export shows full outbound configs usable with 'stunnel apply'.
 ```
 
-**注意:** 导出只显示协议出站的标签名（internal 类型如 `direct`/`block` 已排除）。Clash API 不提供完整的出站配置。使用 `stunnel apply` 时，您需要单独维护完整的出站配置。
+**注意:** 导出只包含协议出站（internal 类型如 `direct`/`block` 已排除）。导出的配置可直接用于 `stunnel apply`。
 
 ## 错误处理
 

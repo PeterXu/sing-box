@@ -189,6 +189,7 @@ type proxyInfo struct {
 	Now     string              `json:"now"`
 	All     []string            `json:"all"`
 	URL     string              `json:"url,omitempty"`
+	Config  json.RawMessage     `json:"config,omitempty"`
 	History []proxyHistoryEntry `json:"history"`
 }
 
@@ -661,12 +662,26 @@ func stunnelExport(baseURL, secret string, client *http.Client, outputFile strin
 			// Export only protocol outbounds (not internal types like direct/block)
 			outbounds := make([]json.RawMessage, 0)
 			for _, tag := range info.All {
-				obType := getOutboundType(baseURL, secret, client, tag)
-				if isProtocolType(obType) {
-					// Note: API doesn't provide full outbound config, only tag
-					// Users need to maintain full configs separately
-					tagJSON, _ := json.Marshal(tag)
-					outbounds = append(outbounds, json.RawMessage(tagJSON))
+				// Get full outbound info including config
+				obData, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies/"+url.PathEscape(tag), secret, nil)
+				if err != nil {
+					// Skip if not found
+					continue
+				}
+				var obInfo proxyInfo
+				if err := json.Unmarshal(obData, &obInfo); err != nil {
+					continue
+				}
+				if isProtocolType(obInfo.Type) && obInfo.Config != nil {
+					// Add type and tag to config for apply compatibility
+					var fullConfig map[string]interface{}
+					if err := json.Unmarshal(obInfo.Config, &fullConfig); err != nil {
+						continue
+					}
+					fullConfig["type"] = strings.ToLower(obInfo.Type)
+					fullConfig["tag"] = obInfo.Name
+					configJSON, _ := json.Marshal(fullConfig)
+					outbounds = append(outbounds, json.RawMessage(configJSON))
 				}
 			}
 			config[name] = stunnelGroupConfig{
@@ -696,6 +711,6 @@ func stunnelExport(baseURL, secret string, client *http.Client, outputFile strin
 		fmt.Println(string(output))
 	}
 
-	fmt.Fprintln(os.Stderr, "Note: Export shows tag names only. For 'stunnel apply', you need full outbound configs.")
+	fmt.Fprintln(os.Stderr, "Note: Export shows full outbound configs usable with 'stunnel apply'.")
 	return nil
 }
