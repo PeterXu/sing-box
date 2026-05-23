@@ -18,6 +18,7 @@ import (
 
 var commandStunnelRemoveForce bool
 var commandStunnelUpdateForce bool
+var commandStunnelApplyForce bool
 
 var commandStunnel = &cobra.Command{
 	Use:   "stunnel",
@@ -113,10 +114,28 @@ var commandStunnelURL = &cobra.Command{
 	},
 }
 
+var commandStunnelApply = &cobra.Command{
+	Use:   "apply <config-file>",
+	Short: "Apply stunnel group config from file (updates outbounds and/or URL)",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		addr, secret, err := clashAPIConfig()
+		if err != nil {
+			log.Fatal(err)
+		}
+		client := &http.Client{Timeout: 30 * time.Second}
+		err = stunnelApply(addr, secret, client, args[0], commandStunnelApplyForce)
+		if err != nil {
+			log.Fatal(err)
+		}
+	},
+}
+
 func init() {
 	commandStunnelRemove.Flags().BoolVar(&commandStunnelRemoveForce, "force", false, "proceed even if removing active outbound")
 	commandStunnelUpdate.Flags().BoolVar(&commandStunnelUpdateForce, "force", false, "proceed even if removing active outbound")
-	commandStunnel.AddCommand(commandStunnelList, commandStunnelAdd, commandStunnelRemove, commandStunnelUpdate, commandStunnelURL)
+	commandStunnelApply.Flags().BoolVar(&commandStunnelApplyForce, "force", false, "proceed even if removing active outbound")
+	commandStunnel.AddCommand(commandStunnelList, commandStunnelAdd, commandStunnelRemove, commandStunnelUpdate, commandStunnelURL, commandStunnelApply)
 	mainCommand.AddCommand(commandStunnel)
 }
 
@@ -379,4 +398,66 @@ func stunnelSetURL(baseURL, secret string, client *http.Client, group, url strin
 	}
 	fmt.Println("Done.")
 	return nil
+}
+
+type stunnelGroupConfig struct {
+	Outbounds []string `json:"outbounds"`
+	URL       string   `json:"url"`
+}
+
+func stunnelApply(baseURL, secret string, client *http.Client, configFile string, force bool) error {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return E.Cause(err, "read config file")
+	}
+	var config map[string]stunnelGroupConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return E.Cause(err, "parse config file")
+	}
+	for group, cfg := range config {
+		fmt.Printf("Applying config for group: %s\n", group)
+		if len(cfg.Outbounds) > 0 {
+			info, err := getGroupInfo(baseURL, secret, client, group)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  Error getting group info: %v\n", err)
+				continue
+			}
+			if info.Now != "" {
+				inNew := false
+				for _, t := range cfg.Outbounds {
+					if t == info.Now {
+						inNew = true
+						break
+					}
+				}
+				if !inNew {
+					if !force {
+						fmt.Fprintf(os.Stderr, "  Error: active outbound %q not in new list. Use --force to proceed.\n", info.Now)
+						continue
+					}
+					fmt.Fprintf(os.Stderr, "  Warning: active outbound %q not in new list, server will re-select.\n", info.Now)
+				}
+			}
+			if err := setGroupMembers(baseURL, secret, client, group, cfg.Outbounds); err != nil {
+				fmt.Fprintf(os.Stderr, "  Error updating outbounds: %v\n", err)
+				continue
+			}
+			fmt.Printf("  Updated outbounds: %v\n", cfg.Outbounds)
+		}
+		if cfg.URL != "" {
+			if err := stunnelSetURLQuiet(baseURL, secret, client, group, cfg.URL); err != nil {
+				fmt.Fprintf(os.Stderr, "  Error updating URL: %v\n", err)
+				continue
+			}
+			fmt.Printf("  Updated URL: %s\n", cfg.URL)
+		}
+	}
+	fmt.Println("Done.")
+	return nil
+}
+
+func stunnelSetURLQuiet(baseURL, secret string, client *http.Client, group, url string) error {
+	body := map[string]string{"url": url}
+	_, err := clashAPIRequest(client, http.MethodPut, baseURL+"/proxies/"+group+"/url", secret, body)
+	return err
 }
