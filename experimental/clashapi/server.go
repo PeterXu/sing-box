@@ -48,7 +48,7 @@ type Server struct {
 	dnsRouter      adapter.DNSRouter
 	outbound       adapter.OutboundManager
 	endpoint       adapter.EndpointManager
-	logger         log.Logger
+	logger         log.ContextLogger
 	httpServer     *http.Server
 	trafficManager *trafficontrol.Manager
 	urlTestHistory adapter.URLTestHistoryStorage

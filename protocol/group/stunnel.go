@@ -110,7 +110,15 @@ func (s *Stunnel) Now() string {
 }
 
 func (s *Stunnel) All() []string {
-	return s.tags
+	s.group.access.RLock()
+	defer s.group.access.RUnlock()
+	return append([]string(nil), s.tags...)
+}
+
+func (s *Stunnel) GetURL() string {
+	s.group.access.RLock()
+	defer s.group.access.RUnlock()
+	return s.link
 }
 
 func (s *Stunnel) URLTest(ctx context.Context) (map[string]uint16, error) {

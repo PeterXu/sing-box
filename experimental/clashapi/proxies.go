@@ -14,8 +14,10 @@ import (
 	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing/common"
 	F "github.com/sagernet/sing/common/format"
+	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badjson"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/render"
@@ -24,6 +26,7 @@ import (
 func proxyRouter(server *Server, router adapter.Router) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", getProxies(server))
+	r.Post("/", createOutbound(server))
 
 	r.Route("/{name}", func(r chi.Router) {
 		r.Use(parseProxyName, findProxyByName(server))
@@ -32,6 +35,7 @@ func proxyRouter(server *Server, router adapter.Router) http.Handler {
 		r.Put("/", updateProxy)
 		r.Put("/members", updateProxyMembers)
 		r.Put("/url", updateProxyURL)
+		r.Delete("/", deleteOutbound(server))
 	})
 	return r
 }
@@ -78,9 +82,13 @@ func proxyInfo(server *Server, detour adapter.Outbound) *badjson.JSONObject {
 	} else {
 		info.Put("history", []*adapter.URLTestHistory{})
 	}
-	if group, isGroup := detour.(adapter.OutboundGroup); isGroup {
-		info.Put("now", group.Now())
-		info.Put("all", group.All())
+	if grp, isGroup := detour.(adapter.OutboundGroup); isGroup {
+		info.Put("now", grp.Now())
+		info.Put("all", grp.All())
+	}
+	// Add URL for Stunnel groups
+	if stunnel, ok := detour.(*group.Stunnel); ok {
+		info.Put("url", stunnel.GetURL())
 	}
 	return &info
 }
@@ -290,5 +298,121 @@ func getProxyDelay(server *Server) func(w http.ResponseWriter, r *http.Request) 
 		render.JSON(w, r, render.M{
 			"delay": delay,
 		})
+	}
+}
+
+type CreateOutboundRequest struct {
+	Type string `json:"type"`
+	Tag  string `json:"tag"`
+}
+
+func createOutbound(server *Server) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Parse raw JSON
+		var rawConfig map[string]any
+		if err := render.DecodeJSON(r.Body, &rawConfig); err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, ErrBadRequest)
+			return
+		}
+
+		// Extract type and tag
+		outboundType, ok := rawConfig["type"].(string)
+		if !ok || outboundType == "" {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError("missing 'type' field"))
+			return
+		}
+		tag, ok := rawConfig["tag"].(string)
+		if !ok || tag == "" {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError("missing 'tag' field"))
+			return
+		}
+
+		// Get registry from context
+		registry := service.FromContext[adapter.OutboundRegistry](server.ctx)
+		if registry == nil {
+			render.Status(r, http.StatusInternalServerError)
+			render.JSON(w, r, newError("outbound registry not available"))
+			return
+		}
+
+		// Create empty options struct for this outbound type
+		options, loaded := registry.CreateOptions(outboundType)
+		if !loaded {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError("unknown outbound type: "+outboundType))
+			return
+		}
+
+		// Re-encode and parse the options excluding type and tag
+		content, err := json.Marshal(rawConfig)
+		if err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+		err = badjson.UnmarshallExcludedContext(r.Context(), content, &CreateOutboundRequest{}, options)
+		if err != nil {
+			render.Status(r, http.StatusBadRequest)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+
+		// Create the outbound via OutboundManager
+		err = server.outbound.Create(server.ctx, server.router, server.logger, tag, outboundType, options)
+		if err != nil {
+			render.Status(r, http.StatusInternalServerError)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+
+		render.Status(r, http.StatusCreated)
+		render.JSON(w, r, render.M{
+			"tag":     tag,
+			"type":    outboundType,
+			"message": "outbound created",
+		})
+	}
+}
+
+func deleteOutbound(server *Server) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.Context().Value(CtxKeyProxyName).(string)
+
+		// Check if outbound exists
+		_, exist := server.outbound.Outbound(name)
+		if !exist {
+			render.Status(r, http.StatusNotFound)
+			render.JSON(w, r, ErrNotFound)
+			return
+		}
+
+		// Check if outbound is used by stunnel groups
+		outbounds := server.outbound.Outbounds()
+		var usedByGroups []string
+		for _, ob := range outbounds {
+			if stunnelGroup, ok := ob.(*group.Stunnel); ok {
+				if common.Contains(stunnelGroup.All(), name) {
+					usedByGroups = append(usedByGroups, ob.Tag())
+				}
+			}
+		}
+		if len(usedByGroups) > 0 {
+			render.Status(r, http.StatusConflict)
+			render.JSON(w, r, newError("outbound is used by stunnel groups: "+strings.Join(usedByGroups, ", ")))
+			return
+		}
+
+		// Delete the outbound
+		err := server.outbound.Remove(name)
+		if err != nil {
+			render.Status(r, http.StatusInternalServerError)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+
+		render.NoContent(w, r)
 	}
 }

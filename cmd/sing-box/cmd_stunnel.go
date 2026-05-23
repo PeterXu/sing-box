@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -17,7 +18,6 @@ import (
 )
 
 var commandStunnelRemoveForce bool
-var commandStunnelUpdateForce bool
 var commandStunnelApplyForce bool
 
 var commandStunnel = &cobra.Command{
@@ -46,23 +46,6 @@ var commandStunnelList = &cobra.Command{
 	},
 }
 
-var commandStunnelAdd = &cobra.Command{
-	Use:   "add <group> <outbound...>",
-	Short: "Add outbounds to a stunnel group",
-	Args:  cobra.MinimumNArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		addr, secret, err := clashAPIConfig()
-		if err != nil {
-			log.Fatal(err)
-		}
-		client := &http.Client{Timeout: 30 * time.Second}
-		err = stunnelAdd(addr, secret, client, args[0], args[1:])
-		if err != nil {
-			log.Fatal(err)
-		}
-	},
-}
-
 var commandStunnelRemove = &cobra.Command{
 	Use:   "remove <group> <outbound...>",
 	Short: "Remove outbounds from a stunnel group",
@@ -74,23 +57,6 @@ var commandStunnelRemove = &cobra.Command{
 		}
 		client := &http.Client{Timeout: 30 * time.Second}
 		err = stunnelRemove(addr, secret, client, args[0], args[1:], commandStunnelRemoveForce)
-		if err != nil {
-			log.Fatal(err)
-		}
-	},
-}
-
-var commandStunnelUpdate = &cobra.Command{
-	Use:   "update <group> <outbound...>",
-	Short: "Replace outbound list of a stunnel group",
-	Args:  cobra.MinimumNArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		addr, secret, err := clashAPIConfig()
-		if err != nil {
-			log.Fatal(err)
-		}
-		client := &http.Client{Timeout: 30 * time.Second}
-		err = stunnelUpdate(addr, secret, client, args[0], args[1:], commandStunnelUpdateForce)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -116,7 +82,7 @@ var commandStunnelURL = &cobra.Command{
 
 var commandStunnelApply = &cobra.Command{
 	Use:   "apply <config-file>",
-	Short: "Apply stunnel group config from file (updates outbounds and/or URL)",
+	Short: "Apply stunnel group config from file (create/update outbounds and URL)",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		addr, secret, err := clashAPIConfig()
@@ -131,11 +97,31 @@ var commandStunnelApply = &cobra.Command{
 	},
 }
 
+var commandStunnelExport = &cobra.Command{
+	Use:   "export [output-file]",
+	Short: "Export all stunnel groups config (outbounds and URL)",
+	Args:  cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		addr, secret, err := clashAPIConfig()
+		if err != nil {
+			log.Fatal(err)
+		}
+		client := &http.Client{Timeout: 30 * time.Second}
+		outputFile := ""
+		if len(args) > 0 {
+			outputFile = args[0]
+		}
+		err = stunnelExport(addr, secret, client, outputFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+	},
+}
+
 func init() {
 	commandStunnelRemove.Flags().BoolVar(&commandStunnelRemoveForce, "force", false, "proceed even if removing active outbound")
-	commandStunnelUpdate.Flags().BoolVar(&commandStunnelUpdateForce, "force", false, "proceed even if removing active outbound")
 	commandStunnelApply.Flags().BoolVar(&commandStunnelApplyForce, "force", false, "proceed even if removing active outbound")
-	commandStunnel.AddCommand(commandStunnelList, commandStunnelAdd, commandStunnelRemove, commandStunnelUpdate, commandStunnelURL, commandStunnelApply)
+	commandStunnel.AddCommand(commandStunnelList, commandStunnelRemove, commandStunnelURL, commandStunnelApply, commandStunnelExport)
 	mainCommand.AddCommand(commandStunnel)
 }
 
@@ -200,6 +186,7 @@ type proxyInfo struct {
 	Type    string              `json:"type"`
 	Now     string              `json:"now"`
 	All     []string            `json:"all"`
+	URL     string              `json:"url,omitempty"`
 	History []proxyHistoryEntry `json:"history"`
 }
 
@@ -213,7 +200,7 @@ type proxiesResponse struct {
 }
 
 func getGroupInfo(baseURL, secret string, client *http.Client, group string) (*proxyInfo, error) {
-	data, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies/"+group, secret, nil)
+	data, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies/"+url.PathEscape(group), secret, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -226,12 +213,12 @@ func getGroupInfo(baseURL, secret string, client *http.Client, group string) (*p
 
 func setGroupMembers(baseURL, secret string, client *http.Client, group string, tags []string) error {
 	body := map[string][]string{"outbounds": tags}
-	_, err := clashAPIRequest(client, http.MethodPut, baseURL+"/proxies/"+group+"/members", secret, body)
+	_, err := clashAPIRequest(client, http.MethodPut, baseURL+"/proxies/"+url.PathEscape(group)+"/members", secret, body)
 	return err
 }
 
 func getMemberDelay(baseURL, secret string, client *http.Client, tag string) uint16 {
-	data, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies/"+tag, secret, nil)
+	data, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies/"+url.PathEscape(tag), secret, nil)
 	if err != nil {
 		return 0
 	}
@@ -288,6 +275,9 @@ func stunnelListGroup(baseURL, secret string, client *http.Client, group string)
 			fmt.Println("Now:", info.Now)
 		}
 	}
+	if info.URL != "" {
+		fmt.Println("URL:", info.URL)
+	}
 	fmt.Println("All:")
 	for _, tag := range info.All {
 		suffix := ""
@@ -301,32 +291,6 @@ func stunnelListGroup(baseURL, secret string, client *http.Client, group string)
 			fmt.Printf("  %s\t%s\n", tag, suffix)
 		}
 	}
-	return nil
-}
-
-func stunnelAdd(baseURL, secret string, client *http.Client, group string, tags []string) error {
-	info, err := getGroupInfo(baseURL, secret, client, group)
-	if err != nil {
-		return err
-	}
-	existing := make(map[string]bool)
-	for _, t := range info.All {
-		existing[t] = true
-	}
-	newList := make([]string, len(info.All), len(info.All)+len(tags))
-	copy(newList, info.All)
-	for _, tag := range tags {
-		if existing[tag] {
-			fmt.Println("skip existing:", tag)
-			continue
-		}
-		newList = append(newList, tag)
-		existing[tag] = true
-	}
-	if err := setGroupMembers(baseURL, secret, client, group, newList); err != nil {
-		return err
-	}
-	fmt.Println("Done.")
 	return nil
 }
 
@@ -363,36 +327,9 @@ func stunnelRemove(baseURL, secret string, client *http.Client, group string, ta
 	return nil
 }
 
-func stunnelUpdate(baseURL, secret string, client *http.Client, group string, tags []string, force bool) error {
-	info, err := getGroupInfo(baseURL, secret, client, group)
-	if err != nil {
-		return err
-	}
-	if info.Now != "" {
-		inNew := false
-		for _, t := range tags {
-			if t == info.Now {
-				inNew = true
-				break
-			}
-		}
-		if !inNew && !force {
-			return E.New(fmt.Sprintf("active outbound %q not in new list. Use --force to proceed.", info.Now))
-		}
-		if !inNew && force {
-			fmt.Fprintf(os.Stderr, "Warning: active outbound %q will be removed, server will re-select.\n", info.Now)
-		}
-	}
-	if err := setGroupMembers(baseURL, secret, client, group, tags); err != nil {
-		return err
-	}
-	fmt.Println("Done.")
-	return nil
-}
-
-func stunnelSetURL(baseURL, secret string, client *http.Client, group, url string) error {
-	body := map[string]string{"url": url}
-	_, err := clashAPIRequest(client, http.MethodPut, baseURL+"/proxies/"+group+"/url", secret, body)
+func stunnelSetURL(baseURL, secret string, client *http.Client, group, checkURL string) error {
+	body := map[string]string{"url": checkURL}
+	_, err := clashAPIRequest(client, http.MethodPut, baseURL+"/proxies/"+url.PathEscape(group)+"/url", secret, body)
 	if err != nil {
 		return err
 	}
@@ -401,8 +338,8 @@ func stunnelSetURL(baseURL, secret string, client *http.Client, group, url strin
 }
 
 type stunnelGroupConfig struct {
-	Outbounds []string `json:"outbounds"`
-	URL       string   `json:"url"`
+	Outbounds []json.RawMessage `json:"outbounds"`
+	URL       string            `json:"url,omitempty"`
 }
 
 func stunnelApply(baseURL, secret string, client *http.Client, configFile string, force bool) error {
@@ -416,15 +353,55 @@ func stunnelApply(baseURL, secret string, client *http.Client, configFile string
 	}
 	for group, cfg := range config {
 		fmt.Printf("Applying config for group: %s\n", group)
+		var tags []string
 		if len(cfg.Outbounds) > 0 {
 			info, err := getGroupInfo(baseURL, secret, client, group)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  Error getting group info: %v\n", err)
 				continue
 			}
+			existing := make(map[string]bool)
+			for _, t := range info.All {
+				existing[t] = true
+			}
+			// Process each outbound (can be tag string or full config object)
+			for _, outboundRaw := range cfg.Outbounds {
+				// Try to parse as string (tag)
+				var tagStr string
+				if err := json.Unmarshal(outboundRaw, &tagStr); err == nil {
+					// It's a tag reference
+					_, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies/"+url.PathEscape(tagStr), secret, nil)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  Error: outbound %s not found\n", tagStr)
+						continue
+					}
+					tags = append(tags, tagStr)
+				} else {
+					// It's a full config object - create outbound
+					var rawConfig map[string]interface{}
+					if err := json.Unmarshal(outboundRaw, &rawConfig); err != nil {
+						fmt.Fprintf(os.Stderr, "  Error parsing outbound config: %v\n", err)
+						continue
+					}
+					tag, ok := rawConfig["tag"].(string)
+					if !ok {
+						fmt.Fprintf(os.Stderr, "  Error: outbound config missing 'tag' field\n")
+						continue
+					}
+					// Create outbound via API
+					_, err := clashAPIRequest(client, http.MethodPost, baseURL+"/proxies", secret, rawConfig)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  Error creating outbound %s: %v\n", tag, err)
+						continue
+					}
+					fmt.Printf("  Created outbound: %s\n", tag)
+					tags = append(tags, tag)
+				}
+			}
+			// Check if current active is in new list
 			if info.Now != "" {
 				inNew := false
-				for _, t := range cfg.Outbounds {
+				for _, t := range tags {
 					if t == info.Now {
 						inNew = true
 						break
@@ -438,11 +415,13 @@ func stunnelApply(baseURL, secret string, client *http.Client, configFile string
 					fmt.Fprintf(os.Stderr, "  Warning: active outbound %q not in new list, server will re-select.\n", info.Now)
 				}
 			}
-			if err := setGroupMembers(baseURL, secret, client, group, cfg.Outbounds); err != nil {
-				fmt.Fprintf(os.Stderr, "  Error updating outbounds: %v\n", err)
-				continue
+			if len(tags) > 0 {
+				if err := setGroupMembers(baseURL, secret, client, group, tags); err != nil {
+					fmt.Fprintf(os.Stderr, "  Error updating outbounds: %v\n", err)
+					continue
+				}
+				fmt.Printf("  Updated outbounds: %v\n", tags)
 			}
-			fmt.Printf("  Updated outbounds: %v\n", cfg.Outbounds)
 		}
 		if cfg.URL != "" {
 			if err := stunnelSetURLQuiet(baseURL, secret, client, group, cfg.URL); err != nil {
@@ -456,8 +435,56 @@ func stunnelApply(baseURL, secret string, client *http.Client, configFile string
 	return nil
 }
 
-func stunnelSetURLQuiet(baseURL, secret string, client *http.Client, group, url string) error {
-	body := map[string]string{"url": url}
-	_, err := clashAPIRequest(client, http.MethodPut, baseURL+"/proxies/"+group+"/url", secret, body)
+func stunnelSetURLQuiet(baseURL, secret string, client *http.Client, group, checkURL string) error {
+	body := map[string]string{"url": checkURL}
+	_, err := clashAPIRequest(client, http.MethodPut, baseURL+"/proxies/"+url.PathEscape(group)+"/url", secret, body)
 	return err
+}
+
+func stunnelExport(baseURL, secret string, client *http.Client, outputFile string) error {
+	data, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies", secret, nil)
+	if err != nil {
+		return err
+	}
+	var resp proxiesResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return E.Cause(err, "parse response")
+	}
+
+	config := make(map[string]stunnelGroupConfig)
+	for name, raw := range resp.Proxies {
+		var info proxyInfo
+		if json.Unmarshal(raw, &info) == nil && info.Type == "Stunnel" {
+			// Export outbounds as tag strings
+			var outbounds []json.RawMessage
+			for _, tag := range info.All {
+				tagJSON, _ := json.Marshal(tag); outbounds = append(outbounds, json.RawMessage(tagJSON))
+			}
+			config[name] = stunnelGroupConfig{
+				Outbounds: outbounds,
+				URL:       info.URL,
+			}
+		}
+	}
+
+	if len(config) == 0 {
+		fmt.Println("No stunnel groups found.")
+		return nil
+	}
+
+	output, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return E.Cause(err, "marshal config")
+	}
+
+	if outputFile != "" {
+		err = os.WriteFile(outputFile, output, 0644)
+		if err != nil {
+			return E.Cause(err, "write output file")
+		}
+		fmt.Printf("Exported to: %s\n", outputFile)
+	} else {
+		fmt.Println(string(output))
+	}
+	return nil
 }
