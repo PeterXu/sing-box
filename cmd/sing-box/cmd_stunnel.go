@@ -353,18 +353,19 @@ type stunnelGroupConfig struct {
 	URL       string            `json:"url,omitempty"`
 }
 
-// Protocol types that can be dynamically created/deleted
+// Protocol types that can be dynamically created/deleted (display names from Clash API)
 var protocolOutboundTypes = map[string]bool{
-	"vmess": true, "vless": true, "trojan": true, "shadowsocks": true,
-	"shadowtls": true, "socks": true, "http": true, "wireguard": true,
-	"tuic": true, "hysteria2": true, "hysteria": true, "naive": true,
-	"anytls": true,
+	"VMess": true, "VLESS": true, "Trojan": true, "Shadowsocks": true,
+	"ShadowTLS": true, "SOCKS": true, "HTTP": true, "WireGuard": true,
+	"TUIC": true, "Hysteria2": true, "Hysteria": true, "Naive": true,
+	"AnyTLS": true,
 }
 
-// Internal types that are pre-configured and should never be modified
+// Internal types that are pre-configured and should never be modified (display names from Clash API)
+// Note: Block is displayed as "Reject" in Clash API
 var internalOutboundTypes = map[string]bool{
-	"block": true, "direct": true, "stunnel": true,
-	"selector": true, "urltest": true, "dns": true,
+	"Reject": true, "Direct": true, "Stunnel": true,
+	"Selector": true, "URLTest": true, "DNS": true,
 }
 
 func isProtocolType(t string) bool {
