@@ -79,22 +79,28 @@ Done.
 
 ### 从文件应用配置
 
-从 JSON 文件应用 stunnel 组配置。创建/更新出站并设置 URL。
+从 JSON 文件应用 stunnel 组配置。创建/删除出站并设置 URL。
 
 ```bash
-sing-box stunnel apply <config-file> [--force]
+sing-box stunnel apply <config-file> [--force] [--mode <mode>]
 ```
 
-配置文件格式支持：
+**模式:**
 
-1. **标签字符串** - 引用现有出站
-2. **完整出站对象** - 动态创建新出站
+| 模式 | 描述 |
+|------|-------------|
+| `replace` (默认) | 用配置替换协议出站（internal 类型如 direct/block 会被保留） |
+| `add` | 添加新出站到现有列表（跳过重复标签） |
+| `remove` | 从组中移除匹配的出站（internal 类型会被保留） |
+
+**配置文件格式:**
+
+只支持完整的出站配置对象，不支持标签字符串引用。
 
 ```json
 {
   "proxy-auto": {
     "outbounds": [
-      "existing-tag",
       {
         "type": "vmess",
         "tag": "新加坡1",
@@ -102,36 +108,59 @@ sing-box stunnel apply <config-file> [--force]
         "server_port": 31241,
         "uuid": "C74DE3A5-A547-45C1-8BA8-6FB3C0A19F2B",
         "security": "auto"
+      },
+      {
+        "type": "vless",
+        "tag": "香港1",
+        "server": "example.com",
+        "server_port": 443,
+        "uuid": "...",
+        "tls": { "enabled": true }
       }
     ],
     "url": "https://cp.cloudflare.com/"
-  },
-  "backup-group": {
-    "outbounds": ["美国1", "美国2"],
-    "url": "https://www.google.com/generate_204"
   }
 }
 ```
 
-示例：
+**允许的出站类型:**
+
+协议类型（可动态管理）: `vmess`, `vless`, `trojan`, `shadowsocks`, `shadowtls`, `socks`, `http`, `wireguard`, `tuic`, `hysteria2`, `hysteria`, `naive`, `anytls`
+
+**内部类型（预配置，不可修改）:** `block`, `direct`, `stunnel`, `selector`, `urltest`, `dns`
+
+**示例:**
 
 ```bash
+# 替换模式 (默认) - 替换协议出站，保留 internal
 $ sing-box stunnel apply groups.json
-Applying config for group: proxy-auto
+Applying config for group: proxy-auto (mode: replace)
+  Deleting outbound: old-proxy-1
+  Keeping existing outbound: direct
   Created outbound: 新加坡1
-  Updated outbounds: [existing-tag 新加坡1]
-  Updated URL: https://cp.cloudflare.com/
-Applying config for group: backup-group
-  Updated outbounds: [美国1 美国2]
-  Updated URL: https://www.google.com/generate_204
-Done.
+  Created outbound: 香港1
+  Updated outbounds: [direct 新加坡1 香港1]
+
+# 添加模式 - 添加新出站
+$ sing-box stunnel apply groups.json --mode add
+Applying config for group: proxy-auto (mode: add)
+  Outbound 香港1 already exists, skipping
+  Created outbound: 美国1
+  Adding outbound: 美国1
+  Updated outbounds: [direct 香港1 美国1]
+
+# 移除模式 - 移除匹配的出站
+$ sing-box stunnel apply groups.json --mode remove
+Applying config for group: proxy-auto (mode: remove)
+  Removing outbound: 香港1
+  Updated outbounds: [direct 新加坡1]
 ```
 
 使用 `--force` 即使移除活跃出站也继续执行。
 
 ### 导出当前配置
 
-导出所有 stunnel 组的配置，格式与 `apply` 相同。
+导出所有 stunnel 组的配置。
 
 ```bash
 # 输出到 stdout
@@ -144,28 +173,17 @@ sing-box stunnel export <output-file>
 示例：
 
 ```bash
-$ sing-box stunnel export stunnel-config.json
-Exported to: stunnel-config.json
-
 $ sing-box stunnel export
 {
   "proxy-auto": {
-    "outbounds": ["新加坡1", "新加坡2", "direct"],
+    "outbounds": ["新加坡1", "香港1"],
     "url": "https://cp.cloudflare.com/"
-  },
-  "backup-group": {
-    "outbounds": ["美国1", "美国2"]
   }
 }
+Note: Export shows tag names only. For 'stunnel apply', you need full outbound configs.
 ```
 
-导出格式与 `apply` 兼容，可以：
-
-```bash
-sing-box stunnel export current.json
-# 编辑 current.json 添加/移除出站
-sing-box stunnel apply current.json
-```
+**注意:** 导出只显示协议出站的标签名（internal 类型如 `direct`/`block` 已排除）。Clash API 不提供完整的出站配置。使用 `stunnel apply` 时，您需要单独维护完整的出站配置。
 
 ## 错误处理
 

@@ -79,22 +79,28 @@ Done.
 
 ### Apply config from file
 
-Apply stunnel group configuration from a JSON file. Creates/updates outbounds and sets URLs.
+Apply stunnel group configuration from a JSON file. Creates/deletes outbounds and sets URLs.
 
 ```bash
-sing-box stunnel apply <config-file> [--force]
+sing-box stunnel apply <config-file> [--force] [--mode <mode>]
 ```
 
-The config file format supports:
+**Modes:**
 
-1. **Tag strings** - reference existing outbounds
-2. **Full outbound objects** - create new outbounds dynamically
+| Mode | Description |
+|------|-------------|
+| `replace` (default) | Replace protocol outbounds with config (internal outbounds like direct/block are preserved) |
+| `add` | Add new outbounds to existing (skip duplicate tags) |
+| `remove` | Remove matching outbounds from group (internal outbounds are preserved) |
+
+**Config file format:**
+
+Only full outbound objects are allowed. Tag strings are not supported.
 
 ```json
 {
   "proxy-auto": {
     "outbounds": [
-      "existing-tag",
       {
         "type": "vmess",
         "tag": "新加坡1",
@@ -102,36 +108,59 @@ The config file format supports:
         "server_port": 31241,
         "uuid": "C74DE3A5-A547-45C1-8BA8-6FB3C0A19F2B",
         "security": "auto"
+      },
+      {
+        "type": "vless",
+        "tag": "香港1",
+        "server": "example.com",
+        "server_port": 443,
+        "uuid": "...",
+        "tls": { "enabled": true }
       }
     ],
     "url": "https://cp.cloudflare.com/"
-  },
-  "backup-group": {
-    "outbounds": ["美国1", "美国2"],
-    "url": "https://www.google.com/generate_204"
   }
 }
 ```
 
-Example:
+**Allowed outbound types:**
+
+Protocol types (can be dynamically managed): `vmess`, `vless`, `trojan`, `shadowsocks`, `shadowtls`, `socks`, `http`, `wireguard`, `tuic`, `hysteria2`, `hysteria`, `naive`, `anytls`
+
+**Internal types (pre-configured, cannot be modified):** `block`, `direct`, `stunnel`, `selector`, `urltest`, `dns`
+
+**Examples:**
 
 ```bash
+# Replace mode (default) - replace protocol outbounds, keep internal
 $ sing-box stunnel apply groups.json
-Applying config for group: proxy-auto
+Applying config for group: proxy-auto (mode: replace)
+  Deleting outbound: old-proxy-1
+  Keeping existing outbound: direct
   Created outbound: 新加坡1
-  Updated outbounds: [existing-tag 新加坡1]
-  Updated URL: https://cp.cloudflare.com/
-Applying config for group: backup-group
-  Updated outbounds: [美国1 美国2]
-  Updated URL: https://www.google.com/generate_204
-Done.
+  Created outbound: 香港1
+  Updated outbounds: [direct 新加坡1 香港1]
+
+# Add mode - add new outbounds
+$ sing-box stunnel apply groups.json --mode add
+Applying config for group: proxy-auto (mode: add)
+  Outbound 香港1 already exists, skipping
+  Created outbound: 美国1
+  Adding outbound: 美国1
+  Updated outbounds: [direct 香港1 美国1]
+
+# Remove mode - remove matching outbounds
+$ sing-box stunnel apply groups.json --mode remove
+Applying config for group: proxy-auto (mode: remove)
+  Removing outbound: 香港1
+  Updated outbounds: [direct 新加坡1]
 ```
 
-Use `--force` to proceed even if removing active outbounds.
+Use `--force` to proceed even if removing active outbound.
 
 ### Export current config
 
-Export all stunnel groups' configuration in the same format as `apply`.
+Export all stunnel groups' configuration.
 
 ```bash
 # Print to stdout
@@ -144,28 +173,17 @@ sing-box stunnel export <output-file>
 Example:
 
 ```bash
-$ sing-box stunnel export stunnel-config.json
-Exported to: stunnel-config.json
-
 $ sing-box stunnel export
 {
   "proxy-auto": {
-    "outbounds": ["新加坡1", "新加坡2", "direct"],
+    "outbounds": ["新加坡1", "香港1"],
     "url": "https://cp.cloudflare.com/"
-  },
-  "backup-group": {
-    "outbounds": ["美国1", "美国2"]
   }
 }
+Note: Export shows tag names only. For 'stunnel apply', you need full outbound configs.
 ```
 
-The exported format is compatible with `apply`, so you can:
-
-```bash
-sing-box stunnel export current.json
-# Edit current.json to add/remove outbounds
-sing-box stunnel apply current.json
-```
+**Note:** The export only shows protocol outbound tag names (internal types like `direct`/`block` are excluded). The Clash API doesn't provide full outbound configurations. For `stunnel apply`, you need to maintain full outbound configs separately.
 
 ## Error Handling
 

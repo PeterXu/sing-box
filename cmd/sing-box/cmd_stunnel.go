@@ -19,6 +19,7 @@ import (
 
 var commandStunnelRemoveForce bool
 var commandStunnelApplyForce bool
+var commandStunnelApplyMode string
 
 var commandStunnel = &cobra.Command{
 	Use:   "stunnel",
@@ -90,7 +91,7 @@ var commandStunnelApply = &cobra.Command{
 			log.Fatal(err)
 		}
 		client := &http.Client{Timeout: 30 * time.Second}
-		err = stunnelApply(addr, secret, client, args[0], commandStunnelApplyForce)
+		err = stunnelApply(addr, secret, client, args[0], commandStunnelApplyForce, commandStunnelApplyMode)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -121,6 +122,7 @@ var commandStunnelExport = &cobra.Command{
 func init() {
 	commandStunnelRemove.Flags().BoolVar(&commandStunnelRemoveForce, "force", false, "proceed even if removing active outbound")
 	commandStunnelApply.Flags().BoolVar(&commandStunnelApplyForce, "force", false, "proceed even if removing active outbound")
+	commandStunnelApply.Flags().StringVar(&commandStunnelApplyMode, "mode", "replace", "apply mode: replace (default), add, remove")
 	commandStunnel.AddCommand(commandStunnelList, commandStunnelRemove, commandStunnelURL, commandStunnelApply, commandStunnelExport)
 	mainCommand.AddCommand(commandStunnel)
 }
@@ -342,7 +344,54 @@ type stunnelGroupConfig struct {
 	URL       string            `json:"url,omitempty"`
 }
 
-func stunnelApply(baseURL, secret string, client *http.Client, configFile string, force bool) error {
+// Protocol types that can be dynamically created/deleted
+var protocolOutboundTypes = map[string]bool{
+	"vmess": true, "vless": true, "trojan": true, "shadowsocks": true,
+	"shadowtls": true, "socks": true, "http": true, "wireguard": true,
+	"tuic": true, "hysteria2": true, "hysteria": true, "naive": true,
+	"anytls": true,
+}
+
+// Internal types that are pre-configured and should never be modified
+var internalOutboundTypes = map[string]bool{
+	"block": true, "direct": true, "stunnel": true,
+	"selector": true, "urltest": true, "dns": true,
+}
+
+func isProtocolType(t string) bool {
+	return protocolOutboundTypes[t]
+}
+
+func isInternalType(t string) bool {
+	return internalOutboundTypes[t]
+}
+
+func getOutboundType(baseURL, secret string, client *http.Client, tag string) string {
+	data, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies/"+url.PathEscape(tag), secret, nil)
+	if err != nil {
+		return ""
+	}
+	var info proxyInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return ""
+	}
+	return info.Type
+}
+
+func deleteOutbound(baseURL, secret string, client *http.Client, tag string) error {
+	_, err := clashAPIRequest(client, http.MethodDelete, baseURL+"/proxies/"+url.PathEscape(tag), secret, nil)
+	return err
+}
+
+func stunnelApply(baseURL, secret string, client *http.Client, configFile string, force bool, mode string) error {
+	// Validate mode
+	switch mode {
+	case "replace", "add", "remove":
+		break
+	default:
+		return E.New("invalid mode: ", mode, " (valid: replace, add, remove)")
+	}
+
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		return E.Cause(err, "read config file")
@@ -352,77 +401,200 @@ func stunnelApply(baseURL, secret string, client *http.Client, configFile string
 		return E.Cause(err, "parse config file")
 	}
 	for group, cfg := range config {
-		fmt.Printf("Applying config for group: %s\n", group)
-		var tags []string
-		if len(cfg.Outbounds) > 0 {
-			info, err := getGroupInfo(baseURL, secret, client, group)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  Error getting group info: %v\n", err)
-				continue
-			}
-			existing := make(map[string]bool)
-			for _, t := range info.All {
-				existing[t] = true
-			}
-			// Process each outbound (can be tag string or full config object)
-			for _, outboundRaw := range cfg.Outbounds {
-				// Try to parse as string (tag)
+		fmt.Printf("Applying config for group: %s (mode: %s)\n", group, mode)
+
+		// Get current group info
+		info, err := getGroupInfo(baseURL, secret, client, group)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Error getting group info: %v\n", err)
+			continue
+		}
+
+		// Parse config outbounds (must be full objects, not tag strings)
+		var configOutbounds []map[string]interface{}
+		var configTags []string
+		for _, outboundRaw := range cfg.Outbounds {
+			var rawConfig map[string]interface{}
+			if err := json.Unmarshal(outboundRaw, &rawConfig); err != nil {
+				// Check if it's a string (tag reference) - not allowed
 				var tagStr string
 				if err := json.Unmarshal(outboundRaw, &tagStr); err == nil {
-					// It's a tag reference
-					_, err := clashAPIRequest(client, http.MethodGet, baseURL+"/proxies/"+url.PathEscape(tagStr), secret, nil)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "  Error: outbound %s not found\n", tagStr)
-						continue
-					}
-					tags = append(tags, tagStr)
-				} else {
-					// It's a full config object - create outbound
-					var rawConfig map[string]interface{}
-					if err := json.Unmarshal(outboundRaw, &rawConfig); err != nil {
-						fmt.Fprintf(os.Stderr, "  Error parsing outbound config: %v\n", err)
-						continue
-					}
-					tag, ok := rawConfig["tag"].(string)
-					if !ok {
-						fmt.Fprintf(os.Stderr, "  Error: outbound config missing 'tag' field\n")
-						continue
-					}
-					// Create outbound via API
-					_, err := clashAPIRequest(client, http.MethodPost, baseURL+"/proxies", secret, rawConfig)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "  Error creating outbound %s: %v\n", tag, err)
-						continue
-					}
-					fmt.Printf("  Created outbound: %s\n", tag)
-					tags = append(tags, tag)
-				}
-			}
-			// Check if current active is in new list
-			if info.Now != "" {
-				inNew := false
-				for _, t := range tags {
-					if t == info.Now {
-						inNew = true
-						break
-					}
-				}
-				if !inNew {
-					if !force {
-						fmt.Fprintf(os.Stderr, "  Error: active outbound %q not in new list. Use --force to proceed.\n", info.Now)
-						continue
-					}
-					fmt.Fprintf(os.Stderr, "  Warning: active outbound %q not in new list, server will re-select.\n", info.Now)
-				}
-			}
-			if len(tags) > 0 {
-				if err := setGroupMembers(baseURL, secret, client, group, tags); err != nil {
-					fmt.Fprintf(os.Stderr, "  Error updating outbounds: %v\n", err)
+					fmt.Fprintf(os.Stderr, "  Error: tag string \"%s\" not allowed, must provide full outbound config\n", tagStr)
 					continue
 				}
-				fmt.Printf("  Updated outbounds: %v\n", tags)
+				fmt.Fprintf(os.Stderr, "  Error parsing outbound config: %v\n", err)
+				continue
+			}
+
+			// Validate type
+			outboundType, ok := rawConfig["type"].(string)
+			if !ok || outboundType == "" {
+				fmt.Fprintf(os.Stderr, "  Error: outbound config missing 'type' field\n")
+				continue
+			}
+			if !isProtocolType(outboundType) {
+				fmt.Fprintf(os.Stderr, "  Error: outbound type \"%s\" is not allowed (internal types: block/direct/stunnel/selector/urltest/dns cannot be modified)\n", outboundType)
+				continue
+			}
+
+			// Validate tag
+			tag, ok := rawConfig["tag"].(string)
+			if !ok || tag == "" {
+				fmt.Fprintf(os.Stderr, "  Error: outbound config missing 'tag' field\n")
+				continue
+			}
+
+			configOutbounds = append(configOutbounds, rawConfig)
+			configTags = append(configTags, tag)
+		}
+
+		if len(configTags) == 0 && mode != "remove" {
+			fmt.Fprintf(os.Stderr, "  Error: no valid outbounds in config\n")
+			continue
+		}
+
+		// Separate existing outbounds into internal and protocol
+		var internalTags []string
+		var protocolTags []string
+		for _, tag := range info.All {
+			obType := getOutboundType(baseURL, secret, client, tag)
+			if isInternalType(obType) {
+				internalTags = append(internalTags, tag)
+			} else if isProtocolType(obType) {
+				protocolTags = append(protocolTags, tag)
 			}
 		}
+
+		// Apply mode to determine final outbounds
+		var finalTags []string
+		var toCreate []map[string]interface{}
+		var toDelete []string
+
+		switch mode {
+		case "replace":
+			// Keep internal, delete protocol not in config, create new from config
+			configTagSet := make(map[string]bool)
+			for _, t := range configTags {
+				configTagSet[t] = true
+			}
+
+			// Find protocol outbounds to delete (not in new config)
+			for _, t := range protocolTags {
+				if !configTagSet[t] {
+					toDelete = append(toDelete, t)
+					fmt.Printf("  Deleting outbound: %s\n", t)
+				}
+			}
+
+			// Find outbounds to create (not existing or existing with different config)
+			existingTagSet := make(map[string]bool)
+			for _, t := range info.All {
+				existingTagSet[t] = true
+			}
+			for _, rawConfig := range configOutbounds {
+				tag := rawConfig["tag"].(string)
+				if !existingTagSet[tag] {
+					toCreate = append(toCreate, rawConfig)
+				} else {
+					// Already exists, keep it (config should match)
+					fmt.Printf("  Keeping existing outbound: %s\n", tag)
+				}
+			}
+
+			finalTags = append(finalTags, internalTags...)
+			finalTags = append(finalTags, configTags...)
+
+		case "add":
+			// Keep all existing + add new (skip duplicate tags)
+			existingTagSet := make(map[string]bool)
+			for _, t := range info.All {
+				existingTagSet[t] = true
+			}
+
+			finalTags = append(finalTags, info.All...)
+
+			for _, rawConfig := range configOutbounds {
+				tag := rawConfig["tag"].(string)
+				if existingTagSet[tag] {
+					fmt.Printf("  Outbound %s already exists, skipping\n", tag)
+				} else {
+					toCreate = append(toCreate, rawConfig)
+					finalTags = append(finalTags, tag)
+					fmt.Printf("  Adding outbound: %s\n", tag)
+				}
+			}
+
+		case "remove":
+			// Keep internal + remove matching protocol tags
+			removeTagSet := make(map[string]bool)
+			for _, t := range configTags {
+				removeTagSet[t] = true
+			}
+
+			finalTags = append(finalTags, internalTags...)
+
+			for _, t := range protocolTags {
+				if removeTagSet[t] {
+					toDelete = append(toDelete, t)
+					fmt.Printf("  Removing outbound: %s\n", t)
+				} else {
+					finalTags = append(finalTags, t)
+				}
+			}
+
+			if len(finalTags) == 0 {
+				fmt.Fprintf(os.Stderr, "  Error: cannot remove all outbounds from group\n")
+				continue
+			}
+		}
+
+		// Delete old outbounds
+		for _, tag := range toDelete {
+			if err := deleteOutbound(baseURL, secret, client, tag); err != nil {
+				fmt.Fprintf(os.Stderr, "  Error deleting outbound %s: %v\n", tag, err)
+			}
+		}
+
+		// Create new outbounds
+		for _, rawConfig := range toCreate {
+			tag := rawConfig["tag"].(string)
+			_, err := clashAPIRequest(client, http.MethodPost, baseURL+"/proxies", secret, rawConfig)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  Error creating outbound %s: %v\n", tag, err)
+				continue
+			}
+			fmt.Printf("  Created outbound: %s\n", tag)
+		}
+
+		// Check if current active is in final list
+		if info.Now != "" {
+			inFinal := false
+			for _, t := range finalTags {
+				if t == info.Now {
+					inFinal = true
+					break
+				}
+			}
+			if !inFinal {
+				if !force {
+					fmt.Fprintf(os.Stderr, "  Error: active outbound %q not in final list. Use --force to proceed.\n", info.Now)
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "  Warning: active outbound %q not in final list, server will re-select.\n", info.Now)
+			}
+		}
+
+		if len(finalTags) == 0 {
+			fmt.Fprintf(os.Stderr, "  Warning: no valid outbounds to set, skipping update\n")
+			continue
+		}
+
+		if err := setGroupMembers(baseURL, secret, client, group, finalTags); err != nil {
+			fmt.Fprintf(os.Stderr, "  Error updating outbounds: %v\n", err)
+			continue
+		}
+		fmt.Printf("  Updated outbounds: %v\n", finalTags)
+
 		if cfg.URL != "" {
 			if err := stunnelSetURLQuiet(baseURL, secret, client, group, cfg.URL); err != nil {
 				fmt.Fprintf(os.Stderr, "  Error updating URL: %v\n", err)
@@ -455,10 +627,16 @@ func stunnelExport(baseURL, secret string, client *http.Client, outputFile strin
 	for name, raw := range resp.Proxies {
 		var info proxyInfo
 		if json.Unmarshal(raw, &info) == nil && info.Type == "Stunnel" {
-			// Export outbounds as tag strings
+			// Export only protocol outbounds (not internal types like direct/block)
 			var outbounds []json.RawMessage
 			for _, tag := range info.All {
-				tagJSON, _ := json.Marshal(tag); outbounds = append(outbounds, json.RawMessage(tagJSON))
+				obType := getOutboundType(baseURL, secret, client, tag)
+				if isProtocolType(obType) {
+					// Note: API doesn't provide full outbound config, only tag
+					// Users need to maintain full configs separately
+					tagJSON, _ := json.Marshal(tag)
+					outbounds = append(outbounds, json.RawMessage(tagJSON))
+				}
 			}
 			config[name] = stunnelGroupConfig{
 				Outbounds: outbounds,
@@ -486,5 +664,7 @@ func stunnelExport(baseURL, secret string, client *http.Client, outputFile strin
 	} else {
 		fmt.Println(string(output))
 	}
+
+	fmt.Fprintln(os.Stderr, "Note: Export shows tag names only. For 'stunnel apply', you need full outbound configs.")
 	return nil
 }
