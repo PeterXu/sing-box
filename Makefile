@@ -18,22 +18,22 @@ LIBBOX_FFI_CONFIG ?= ./experimental/libbox/ffi.json
 
 build:
 	export GOTOOLCHAIN=local && \
-	go build $(MAIN_PARAMS) $(MAIN)
+	GOOS=$(OS) GOARCH=$(ARCH) go build $(MAIN_PARAMS) $(MAIN)
 
 race:
 	export GOTOOLCHAIN=local && \
-	go build -race $(MAIN_PARAMS) $(MAIN)
+	GOOS=$(OS) GOARCH=$(ARCH) go build -race $(MAIN_PARAMS) $(MAIN)
 
 ci_build:
 	export GOTOOLCHAIN=local && \
-	go build $(PARAMS) $(MAIN) && \
-	go build $(MAIN_PARAMS) $(MAIN)
+	GOOS=$(OS) GOARCH=$(ARCH) go build $(PARAMS) $(MAIN) && \
+	GOOS=$(OS) GOARCH=$(ARCH) go build $(MAIN_PARAMS) $(MAIN)
 
 generate_completions:
 	go run -v --tags "$(TAGS),generate,generate_completions" $(MAIN)
 
 install:
-	go build -o $(PREFIX)/bin/$(NAME) $(MAIN_PARAMS) $(MAIN)
+	GOOS=$(OS) GOARCH=$(ARCH) go build -o $(PREFIX)/bin/$(NAME) $(MAIN_PARAMS) $(MAIN)
 
 fmt:
 	@golangci-lint fmt
