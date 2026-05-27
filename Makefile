@@ -10,7 +10,9 @@ OS ?= $(shell go env GOOS)
 ARCH ?= $(shell go env GOARCH)
 
 LDFLAGS_SHARED = $(shell cat release/LDFLAGS)
-PARAMS = -v -trimpath -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=$(VERSION)' $(LDFLAGS_SHARED) -s -w -buildid="
+# Should remove -trimpath in go build
+#PARAMS = -v -ldflags -trimpath "-X 'github.com/sagernet/sing-box/constant.Version=$(VERSION)' $(LDFLAGS_SHARED) -s -w -buildid="
+PARAMS = -v -ldflags "-s -w $(LDFLAGS_SHARED) -X github.com/sagernet/sing-box/constant.Version=$(VERSION)"
 MAIN_PARAMS = $(PARAMS) -tags "$(TAGS)"
 MAIN = ./cmd/sing-box
 PREFIX ?= $(shell go env GOPATH)
